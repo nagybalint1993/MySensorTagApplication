@@ -13,6 +13,7 @@ import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
+import android.util.Log;
 import android.view.View;
 import android.widget.ListView;
 import android.widget.Toast;
@@ -80,13 +81,15 @@ public class DeviceScanActivity extends ListActivity {
 
         switch (connState) {
             case BluetoothGatt.STATE_CONNECTED:
-                mBluetoothLeService.disconnect();
+                //mBluetoothLeService.disconnect(null);
                 break;
             case BluetoothGatt.STATE_DISCONNECTED:
                 boolean ok = mBluetoothLeService.connect(mBluetoothDevice.getAddress());
                 if (!ok) {
+                    Log.i("DSA","Connect failed");
                //     setError("Connect failed");
                 }
+                Log.i("DSA","Connected to the device");
                 break;
             default:
                // setError("Device busy (connecting/disconnecting)");
@@ -106,33 +109,22 @@ public class DeviceScanActivity extends ListActivity {
         }
     }
 
+
     private final ServiceConnection mServiceConnection = new ServiceConnection() {
 
+        @Override
         public void onServiceConnected(ComponentName componentName, IBinder service) {
-            mBluetoothLeService = ((BluetoothLeService.LocalBinder) service)
-                    .getService();
+            mBluetoothLeService = ((BluetoothLeService.LocalBinder) service).getService();
             if (!mBluetoothLeService.initialize()) {
-                //Toast.makeText(this, "Unable to initialize BluetoothLeService", Toast.LENGTH_SHORT).show();
+                Log.i("DSA", "Unable to initialize Bluetooth");
                 finish();
-                return;
             }
 
-/*            final int n = mBluetoothLeService.numConnectedDevices();
-            if (n > 0) {
-                runOnUiThread(new Runnable() {
-                    public void run() {
-                        mThis.setError("Multiple connections!");
-                    }
-                });
-            } else {
-                startScan();
-                // Log.i(TAG, "BluetoothLeService connected");
-            }*/
         }
 
+        @Override
         public void onServiceDisconnected(ComponentName componentName) {
             mBluetoothLeService = null;
-            // Log.i(TAG, "BluetoothLeService disconnected");
         }
     };
 
@@ -180,6 +172,13 @@ public class DeviceScanActivity extends ListActivity {
         super.onPause();
         scanLeDevice(false);
         mLeDeviceListAdapter.clear();
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        unbindService(mServiceConnection);
+        mBluetoothLeService = null;
     }
 
 

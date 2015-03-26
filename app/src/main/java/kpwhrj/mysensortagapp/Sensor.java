@@ -1,5 +1,8 @@
 package kpwhrj.mysensortagapp;
 
+import android.bluetooth.BluetoothGattCharacteristic;
+
+import java.util.List;
 import java.util.UUID;
 
 import static java.lang.Math.pow;
@@ -13,9 +16,9 @@ import static kpwhrj.mysensortagapp.SensorTagGatt.UUID_OPT_SERV;
 
 public enum Sensor {
 
-    IR_TEMPERATURE(UUID_IRT_SERV, UUID_IRT_DATA,UUID_IRT_CONF){
-
-       public Point3D convert( final byte[] value){
+    IR_TEMPERATURE(UUID_IRT_SERV, UUID_IRT_DATA, UUID_IRT_CONF) {
+        @Override
+        public Point3D convert(final byte [] value) {
 
       /*
        * The IR Temperature sensor produces two measurements; Object ( AKA target or IR) Temperature, and Ambient ( AKA die ) temperature.
@@ -28,14 +31,12 @@ public enum Sensor {
             return new Point3D(ambient, target, 0);
         }
 
-
-
-    private double extractAmbientTemperature(byte[] v) {
+        private double extractAmbientTemperature(byte [] v) {
             int offset = 2;
             return shortUnsignedAtOffset(v, offset) / 128.0;
         }
 
-        private double extractTargetTemperature(byte[] v, double ambient) {
+        private double extractTargetTemperature(byte [] v, double ambient) {
             Integer twoByteValue = shortSignedAtOffset(v, 0);
 
             double Vobj2 = twoByteValue.doubleValue();
@@ -58,8 +59,78 @@ public enum Sensor {
 
             return tObj - 273.15;
         }
+    },
 
+    ACCELEROMETER(UUID_ACC_SERV, UUID_ACC_DATA, UUID_ACC_CONF,(byte)3) {
+        @Override
+        public Point3D convert(final byte[] value) {
+  		/*
+  		 * The accelerometer has the range [-2g, 2g] with unit (1/64)g.
+  		 * To convert from unit (1/64)g to unit g we divide by 64.
+  		 * (g = 9.81 m/s^2)
+  		 * The z value is multiplied with -1 to coincide with how we have arbitrarily defined the positive y direction. (illustrated by the apps accelerometer
+  		 * image)
+  		 */
 
+            /*
+            DeviceControlActivity da = DeviceControlActivity.getInstance();
+
+            if (da.isSensorTag2()) {
+                // Range 8G
+                final float SCALE = (float) 4096.0;
+
+                int x = (value[0]<<8) + value[1];
+                int y = (value[2]<<8) + value[3];
+                int z = (value[4]<<8) + value[5];
+                return new Point3D(x / SCALE, y / SCALE, z / SCALE);
+            } else {
+                Point3D v;
+                Integer x = (int) value[0];
+                Integer y = (int) value[1];
+                Integer z = (int) value[2] * -1;
+
+                if (da.firmwareRevision().contains("1.5"))
+                {
+                    // Range 8G
+                    final float SCALE = (float) 64.0;
+                    v = new Point3D(x / SCALE, y / SCALE, z / SCALE);
+                } else {
+                    // Range 2G
+                    final float SCALE = (float) 16.0;
+                    v = new Point3D(x / SCALE, y / SCALE, z / SCALE);
+                }
+                return v;*
+            }*/
+            return new Point3D(0,0,0);
+        }
+    },
+
+    HUMIDITY(UUID_HUM_SERV, UUID_HUM_DATA, UUID_HUM_CONF) {
+        @Override
+        public Point3D convert(final byte[] value) {
+            int a = shortUnsignedAtOffset(value, 2);
+            // bits [1..0] are status bits and need to be cleared according
+            // to the user guide, but the iOS code doesn't bother. It should
+            // have minimal impact.
+            a = a - (a % 4);
+
+            return new Point3D((-6f) + 125f * (a / 65535f), 0, 0);
+        }
+    },
+
+    MAGNETOMETER(UUID_MAG_SERV, UUID_MAG_DATA, UUID_MAG_CONF) {
+        @Override
+        public Point3D convert(final byte [] value) {
+            /*
+            Point3D mcal = MagnetometerCalibrationCoefficients.INSTANCE.val;
+            // Multiply x and y with -1 so that the values correspond with the image in the app
+            float x = shortSignedAtOffset(value, 0) * (2000f / 65536f) * -1;
+            float y = shortSignedAtOffset(value, 2) * (2000f / 65536f) * -1;
+            float z = shortSignedAtOffset(value, 4) * (2000f / 65536f);
+
+            return new Point3D(x - mcal.x, y - mcal.y, z - mcal.z);*/
+            return new Point3D(0,0,0);
+        }
     },
 
     LUXOMETER(UUID_OPT_SERV, UUID_OPT_DATA, UUID_OPT_CONF) {
@@ -78,18 +149,99 @@ public enum Sensor {
 
             return new Point3D(output / 100.0f, 0, 0);
         }
+    },
+
+    GYROSCOPE(UUID_GYR_SERV, UUID_GYR_DATA, UUID_GYR_CONF, (byte)7) {
+        @Override
+        public Point3D convert(final byte [] value) {
+
+            float y = shortSignedAtOffset(value, 0) * (500f / 65536f) * -1;
+            float x = shortSignedAtOffset(value, 2) * (500f / 65536f);
+            float z = shortSignedAtOffset(value, 4) * (500f / 65536f);
+
+            return new Point3D(x,y,z);
+        }
+    },
+
+    BAROMETER(SensorTagGatt.UUID_BAR_SERV, SensorTagGatt.UUID_BAR_DATA, SensorTagGatt.UUID_BAR_CONF) {
+        @Override
+        public Point3D convert(final byte [] value) {
+
+ /*
+                List<Integer> barometerCalibrationCoefficients = BarometerCalibrationCoefficients.INSTANCE.barometerCalibrationCoefficients;
+                if (barometerCalibrationCoefficients == null) {
+                    // Log.w("Sensor", "Data notification arrived for barometer before it was calibrated.");
+                    return new Point3D(0,0,0);
+                }
+
+                final int[] c; // Calibration coefficients
+                final Integer t_r; // Temperature raw value from sensor
+                final Integer p_r; // Pressure raw value from sensor
+                final Double S; // Interim value in calculation
+                final Double O; // Interim value in calculation
+                final Double p_a; // Pressure actual value in unit Pascal.
+
+                c = new int[barometerCalibrationCoefficients.size()];
+                for (int i = 0; i < barometerCalibrationCoefficients.size(); i++) {
+                    c[i] = barometerCalibrationCoefficients.get(i);
+                }
+
+                t_r = shortSignedAtOffset(value, 0);
+                p_r = shortUnsignedAtOffset(value, 2);
+
+                S = c[2] + c[3] * t_r / pow(2, 17) + ((c[4] * t_r / pow(2, 15)) * t_r) / pow(2, 19);
+                O = c[5] * pow(2, 14) + c[6] * t_r / pow(2, 3) + ((c[7] * t_r / pow(2, 15)) * t_r) / pow(2, 4);
+                p_a = (S * p_r + O) / pow(2, 14);
+
+                return new Point3D(p_a,0,0);*/
+            return new Point3D(0,0,0);
+            }
+
+    },
+
+    SIMPLE_KEYS(UUID_KEY_SERV, UUID_KEY_DATA, null) {
+        @Override
+        public SimpleKeysStatus convertKeys(final byte value) {
+  		/* Key mapping for SensorTagGatt:
+  		 * 0 - right key
+  		 * 1 - left key
+  		 * 2 - side key
+  		 */
+            int keys = (int) value;
+
+
+            return SimpleKeysStatus.values()[keys & 7];
+        }
     };
 
+    /**
+     * Gyroscope, Magnetometer, Barometer, IR temperature all store 16 bit two's complement values as LSB MSB, which cannot be directly parsed
+     * as getIntValue(FORMAT_SINT16, offset) because the bytes are stored as little-endian.
+     *
+     * This function extracts these 16 bit two's complement values.
+     * */
     private static Integer shortSignedAtOffset(byte[] c, int offset) {
         Integer lowerByte = (int) c[offset] & 0xFF;
-        Integer upperByte = (int) c[offset + 1]; // // Interpret MSB as signed
+        Integer upperByte = (int) c[offset+1]; // // Interpret MSB as signed
         return (upperByte << 8) + lowerByte;
     }
 
     private static Integer shortUnsignedAtOffset(byte[] c, int offset) {
         Integer lowerByte = (int) c[offset] & 0xFF;
-        Integer upperByte = (int) c[offset + 1] & 0xFF; // // Interpret MSB as signed
+        Integer upperByte = (int) c[offset+1] & 0xFF; // // Interpret MSB as signed
         return (upperByte << 8) + lowerByte;
+    }
+
+    public void onCharacteristicChanged(BluetoothGattCharacteristic c) {
+        throw new UnsupportedOperationException("Error: the individual enum classes are supposed to override this method.");
+    }
+
+    public SimpleKeysStatus convertKeys(byte value) {
+        throw new UnsupportedOperationException("Error: the individual enum classes are supposed to override this method.");
+    }
+
+    public Point3D convert(byte[] value) {
+        throw new UnsupportedOperationException("Error: the individual enum classes are supposed to override this method.");
     }
 
     private final UUID service, data, config;
@@ -98,6 +250,20 @@ public enum Sensor {
     public static final byte ENABLE_SENSOR_CODE = 1;
     public static final byte CALIBRATE_SENSOR_CODE = 2;
 
+    /**
+     * Constructor called by the Gyroscope and Accelerometer because it more than a boolean enable
+     * code.
+     */
+    private Sensor(UUID service, UUID data, UUID config, byte enableCode) {
+        this.service = service;
+        this.data = data;
+        this.config = config;
+        this.enableCode = enableCode;
+    }
+
+    /**
+     * Constructor called by all the sensors except Gyroscope
+     * */
     private Sensor(UUID service, UUID data, UUID config) {
         this.service = service;
         this.data = data;
@@ -105,10 +271,9 @@ public enum Sensor {
         this.enableCode = ENABLE_SENSOR_CODE; // This is the sensor enable code for all sensors except the gyroscope
     }
 
-    public Point3D convert(byte[] value) {
-        throw new UnsupportedOperationException("Error: the individual enum classes are supposed to override this method.");
-    }
-
+    /**
+     * @return the code which, when written to the configuration characteristic, turns on the sensor.
+     * */
     public byte getEnableSensorCode() {
         return enableCode;
     }
@@ -125,5 +290,14 @@ public enum Sensor {
         return config;
     }
 
-    public static final Sensor[] SENSOR_LIST = {IR_TEMPERATURE};
+    public static Sensor getFromDataUuid(UUID uuid) {
+        for (Sensor s : Sensor.values()) {
+            if (s.getData().equals(uuid)) {
+                return s;
+            }
+        }
+        throw new RuntimeException("unable to find UUID.");
+    }
+
+    public static final Sensor[] SENSOR_LIST = {IR_TEMPERATURE, ACCELEROMETER, MAGNETOMETER, LUXOMETER, GYROSCOPE, HUMIDITY, BAROMETER, SIMPLE_KEYS};
 }

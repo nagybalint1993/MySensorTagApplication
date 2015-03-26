@@ -32,8 +32,10 @@ package kpwhrj.mysensortagapp;
         import android.content.Intent;
         import android.content.IntentFilter;
         import android.content.ServiceConnection;
+        import android.content.SharedPreferences;
         import android.os.Bundle;
         import android.os.IBinder;
+        import android.preference.PreferenceManager;
         import android.util.Log;
         import android.view.Menu;
         import android.view.MenuItem;
@@ -44,9 +46,11 @@ package kpwhrj.mysensortagapp;
         import android.widget.Toast;
 
         import java.text.DecimalFormat;
+        import java.util.AbstractCollection;
         import java.util.ArrayList;
         import java.util.HashMap;
         import java.util.List;
+        import java.util.Locale;
         import java.util.UUID;
 
         import static java.util.UUID.fromString;
@@ -62,6 +66,7 @@ public class DeviceControlActivity extends Activity {
 
     public static final String EXTRAS_DEVICE_NAME = "DEVICE_NAME";
     public static final String EXTRAS_DEVICE_ADDRESS = "DEVICE_ADDRESS";
+    private static final int GATT_TIMEOUT = 250;
 
 
     private String mDeviceName;
@@ -87,29 +92,22 @@ public class DeviceControlActivity extends Activity {
     String mAmb;
     String mObj;
 
+    private BluetoothGatt mBluetoothGatt;
+    private BluetoothManager mBluetoothManager;
+    private BluetoothAdapter mBtAdapter;
+
     private DecimalFormat decimal = new DecimalFormat("+0.00;-0.00");
 
+    private boolean mServicesRdy= false;
+    private List<BluetoothGattService> mServiceList;
+    private BluetoothGattService mOadService;
+    private BluetoothGattService mConnControlService;
+    private boolean mBusy=false;
+    private boolean mIsReceiving=false;
+    private List<Sensor> mEnabledSensors = new ArrayList<Sensor>();
+
     // Code to manage Service lifecycle.
-    private final ServiceConnection mServiceConnection = new ServiceConnection() {
 
-        @Override
-        public void onServiceConnected(ComponentName componentName, IBinder service) {
-            mBluetoothLeService = ((BluetoothLeService.LocalBinder) service).getService();
-            if (!mBluetoothLeService.initialize()) {
-                Log.i(TAG, "Unable to initialize Bluetooth");
-                finish();
-            }
-            // Automatically connects to the device upon successful start-up initialization.
-            mBluetoothLeService.connect(mDeviceAddress);
-            mBluetoothGatt=mBluetoothLeService.getGatt();
-            Log.i(TAG,"Bluetooth initialized");
-        }
-
-        @Override
-        public void onServiceDisconnected(ComponentName componentName) {
-            mBluetoothLeService = null;
-        }
-    };
 
     // Handles various events fired by the Service.
     // ACTION_GATT_CONNECTED: connected to a GATT server.
@@ -121,52 +119,307 @@ public class DeviceControlActivity extends Activity {
         @Override
         public void onReceive(Context context, Intent intent) {
             final String action = intent.getAction();
-            if (BluetoothLeService.ACTION_GATT_CONNECTED.equals(action)) {
-                mConnected = true;
-                //updateConnectionState(R.string.connected);
-                invalidateOptionsMenu();
-            } else if (BluetoothLeService.ACTION_GATT_DISCONNECTED.equals(action)) {
-                mConnected = false;
-                //updateConnectionState(R.string.disconnected);
-                invalidateOptionsMenu();
-                clearUI();
-            } else if (BluetoothLeService.ACTION_GATT_SERVICES_DISCOVERED.equals(action)) {
-                // Show all the supported services and characteristics on the user interface.
-                //displayGattServices(mBluetoothLeService.getSupportedGattServices());
-            } else if (BluetoothLeService.ACTION_DATA_AVAILABLE.equals(action)) {
-                //String uuidStr = intent.getStringExtra(BluetoothLeService.EXTRA_UUID);
+            int status = intent.getIntExtra(BluetoothLeService.EXTRA_STATUS,
+                    BluetoothGatt.GATT_SUCCESS);
+
+            if (BluetoothLeService.ACTION_GATT_SERVICES_DISCOVERED.equals(action)) {
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    //setStatus("Service discovery complete");
+                    displayServices();
+                    checkOad();
+                    enableDataCollection(true);
+                    getFirmwareRevison();
+                } else {
+                    Toast.makeText(getApplication(), "Service discovery failed",
+                            Toast.LENGTH_LONG).show();
+                    return;
+                }
+            } else if (BluetoothLeService.ACTION_DATA_NOTIFY.equals(action)) {
+                // Notification
                 byte[] value = intent.getByteArrayExtra(BluetoothLeService.EXTRA_DATA);
-                onCharacteristicChanged(value);
+                String uuidStr = intent.getStringExtra(BluetoothLeService.EXTRA_UUID);
+                onCharacteristicChanged(uuidStr, value);
+            } else if (BluetoothLeService.ACTION_DATA_WRITE.equals(action)) {
+                // Data written
+                String uuidStr = intent.getStringExtra(BluetoothLeService.EXTRA_UUID);
+                //onCharacteristicWrite(uuidStr, status);
+            } else if (BluetoothLeService.ACTION_DATA_READ.equals(action)) {
+                // Data read
+                String uuidStr = intent.getStringExtra(BluetoothLeService.EXTRA_UUID);
+                byte[] value = intent.getByteArrayExtra(BluetoothLeService.EXTRA_DATA);
+                onCharacteristicsRead(uuidStr, value, status);
+            }
+
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                setError("GATT error code: " + status);
             }
         }
     };
-    private BluetoothGatt mBluetoothGatt;
-    private BluetoothManager mBluetoothManager;
-    private BluetoothAdapter mBtAdapter;
-
-    public void onCharacteristicChanged(byte[] rawValue) {
-        Point3D v;
-        String msg;
-
-
-            // a megkapot értéket átkonvertálja egy vektórrá, ahol az első koordináta lesz az külső hőmérséklet a második pedig a sensorral mért
-            v = Sensor.IR_TEMPERATURE.convert(rawValue);
-            mAmb = decimal.format(v.x) + "\n";
-            mObj = decimal.format(v.y) + "\n";
-
-            if(mAmb.equals(null) && mObj.equals(null)){
-                mObjValue.setText("Nincs Adat");
-                mAmbValue.setText("Nincs Adat");
-            }
-            else{
-                mObjValue.setText(mObj);
-                mAmbValue.setText(mAmb);
-            }
 
 
 
+    private void getFirmwareRevison() {
+        UUID servUuid = SensorTagGatt.UUID_DEVINFO_SERV;
+        UUID charUuid = SensorTagGatt.UUID_DEVINFO_FWREV;
+        BluetoothGattService serv = mBluetoothGatt.getService(servUuid);
+        BluetoothGattCharacteristic charFwrev = serv.getCharacteristic(charUuid);
+
+        // Write the calibration code to the configuration registers
+        mBluetoothLeService.readCharacteristic(charFwrev);
+        mBluetoothLeService.waitIdle(GATT_TIMEOUT);
 
     }
+
+    private void displayServices() {
+        mServicesRdy = true;
+
+        try {
+            mServiceList = mBluetoothLeService.getSupportedGattServices();
+        } catch (Exception e) {
+            e.printStackTrace();
+            mServicesRdy = false;
+        }
+
+        // Characteristics descriptor readout done
+        if (!mServicesRdy) {
+            setError("Failed to read services");
+        }
+    }
+
+    private void enableDataCollection(boolean enable) {
+        setBusy(true);
+        enableSensors(enable);
+        enableNotifications(enable);
+        setBusy(false);
+    }
+
+    void setBusy(boolean f) {
+        if (f != mBusy)
+        {
+            mBusy = f;
+        }
+    }
+
+    private void updateSensorList() {
+        mEnabledSensors.clear();
+
+        for (int i = 0; i < Sensor.SENSOR_LIST.length; i++) {
+            Sensor sensor = Sensor.SENSOR_LIST[i];
+            if (isEnabledByPrefs(sensor)) {
+                mEnabledSensors.add(sensor);
+            }
+        }
+    }
+
+    boolean isEnabledByPrefs(final Sensor sensor) {
+        String preferenceKeyString = "pref_"
+                + sensor.name().toLowerCase(Locale.ENGLISH) + "_on";
+
+        SharedPreferences prefs = PreferenceManager
+                .getDefaultSharedPreferences(this);
+
+        Boolean defaultValue = true;
+        return prefs.getBoolean(preferenceKeyString, defaultValue);
+    }
+
+    private void enableSensors(boolean f) {
+        final boolean enable = f;
+
+        for (Sensor sensor : mEnabledSensors) {
+            UUID servUuid = sensor.getService();
+            UUID confUuid = sensor.getConfig();
+
+            // Skip keys
+            if (confUuid == null)
+                break;
+
+
+                // Barometer calibration
+                if (confUuid.equals(SensorTagGatt.UUID_BAR_CONF) && enable) {
+//*********                    calibrateBarometer();
+                }
+
+
+            BluetoothGattService serv = mBluetoothGatt.getService(servUuid);
+            if (serv != null) {
+                BluetoothGattCharacteristic charac = serv.getCharacteristic(confUuid);
+                byte value = enable ? sensor.getEnableSensorCode()
+                        : Sensor.DISABLE_SENSOR_CODE;
+                if (mBluetoothLeService.writeCharacteristic(charac, value)) {
+                    mBluetoothLeService.waitIdle(GATT_TIMEOUT);
+                } else {
+                    setError("Sensor config failed: " + serv.getUuid().toString());
+                    break;
+                }
+            }
+        }
+    }
+
+    private void enableNotifications(boolean f) {
+        final boolean enable = f;
+
+        for (Sensor sensor : mEnabledSensors) {
+            UUID servUuid = sensor.getService();
+            UUID dataUuid = sensor.getData();
+            BluetoothGattService serv = mBluetoothGatt.getService(servUuid);
+            if (serv != null) {
+                BluetoothGattCharacteristic charac = serv.getCharacteristic(dataUuid);
+
+                if (mBluetoothLeService.setCharacteristicNotification(charac, enable)) {
+                    mBluetoothLeService.waitIdle(GATT_TIMEOUT);
+                    try {
+                        Thread.sleep(50);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                } else {
+                    setError("Sensor notification failed: " + serv.getUuid().toString());
+                    break;
+                }
+            }
+        }
+    }
+
+    private void checkOad() {
+        // Check if OAD is supported (needs OAD and Connection Control service)
+        mOadService = null;
+        mConnControlService = null;
+
+        for (int i = 0; i < mServiceList.size()
+                && (mOadService == null || mConnControlService == null); i++) {
+            BluetoothGattService srv = mServiceList.get(i);
+            if (srv.getUuid().equals(GattInfo.OAD_SERVICE_UUID)) {
+                mOadService = srv;
+            }
+            if (srv.getUuid().equals(GattInfo.CC_SERVICE_UUID)) {
+                mConnControlService = srv;
+            }
+        }
+    }
+
+    private void setError(String txt) {
+
+        Toast.makeText(this, txt, Toast.LENGTH_LONG).show();
+    }
+
+    private void onCharacteristicsRead(String uuidStr, byte[] value, int status) {
+        // Log.i(TAG, "onCharacteristicsRead: " + uuidStr);
+
+/*        if (uuidStr.equals(SensorTagGatt.UUID_DEVINFO_FWREV.toString())) {
+            mFwRev = new String(value, 0, 3);
+            Toast.makeText(this, "Firmware revision: " + mFwRev,Toast.LENGTH_LONG).show();
+        }*/
+
+
+        if (uuidStr.equals(SensorTagGatt.UUID_BAR_CALI.toString())) {
+            // Sanity check
+            if (value.length != 16)
+                return;
+
+            // Barometer calibration values are read.
+            List<Integer> cal = new ArrayList<Integer>();
+            for (int offset = 0; offset < 8; offset += 2) {
+                Integer lowerByte = (int) value[offset] & 0xFF;
+                Integer upperByte = (int) value[offset + 1] & 0xFF;
+                cal.add((upperByte << 8) + lowerByte);
+            }
+
+            for (int offset = 8; offset < 16; offset += 2) {
+                Integer lowerByte = (int) value[offset] & 0xFF;
+                Integer upperByte = (int) value[offset + 1];
+                cal.add((upperByte << 8) + lowerByte);
+            }
+
+//********            BarometerCalibrationCoefficients.INSTANCE.barometerCalibrationCoefficients = cal;
+        }
+    }
+
+
+    public void onCharacteristicChanged(String uuidStr, byte[] rawValue) {
+        Point3D v;
+        String msg;
+/*
+        if (uuidStr.equals(SensorTagGatt.UUID_ACC_DATA.toString())) {
+            v = Sensor.ACCELEROMETER.convert(rawValue);
+            msg = decimal.format(v.x) + "\n" + decimal.format(v.y) + "\n"
+                    + decimal.format(v.z) + "\n";
+            mAccValue.setText(msg);
+        }
+
+        if (uuidStr.equals(SensorTagGatt.UUID_MAG_DATA.toString())) {
+            v = Sensor.MAGNETOMETER.convert(rawValue);
+            msg = decimal.format(v.x) + "\n" + decimal.format(v.y) + "\n"
+                    + decimal.format(v.z) + "\n";
+            mMagValue.setText(msg);
+        }
+
+        if (uuidStr.equals(SensorTagGatt.UUID_OPT_DATA.toString())) {
+            v = Sensor.LUXOMETER.convert(rawValue);
+            msg = decimal.format(v.x) + "\n";
+            mLuxValue.setText(msg);
+        }
+
+        if (uuidStr.equals(SensorTagGatt.UUID_GYR_DATA.toString())) {
+            v = Sensor.GYROSCOPE.convert(rawValue);
+            msg = decimal.format(v.x) + "\n" + decimal.format(v.y) + "\n"
+                    + decimal.format(v.z) + "\n";
+            mGyrValue.setText(msg);
+        }
+*/
+        if (uuidStr.equals(SensorTagGatt.UUID_IRT_DATA.toString())) {
+            v = Sensor.IR_TEMPERATURE.convert(rawValue);
+            msg = decimal.format(v.x) + "\n";
+            mAmbValue.setText(msg);
+            msg = decimal.format(v.y) + "\n";
+            mObjValue.setText(msg);
+        }
+/*
+        if (uuidStr.equals(SensorTagGatt.UUID_HUM_DATA.toString())) {
+            v = Sensor.HUMIDITY.convert(rawValue);
+            msg = decimal.format(v.x) + "\n";
+            mHumValue.setText(msg);
+        }
+
+        if (uuidStr.equals(SensorTagGatt.UUID_BAR_DATA.toString())) {
+            v = Sensor.BAROMETER.convert(rawValue);
+
+            double h = (v.x - BarometerCalibrationCoefficients.INSTANCE.heightCalibration)
+                    / PA_PER_METER;
+            h = (double) Math.round(-h * 10.0) / 10.0;
+            msg = decimal.format(v.x / 100.0f) + "\n" + h;
+            mBarValue.setText(msg);
+        }
+
+        if (uuidStr.equals(SensorTagGatt.UUID_KEY_DATA.toString())) {
+            int keys = rawValue[0];
+            SimpleKeysStatus s;
+            final int imgBtn;
+            s = Sensor.SIMPLE_KEYS.convertKeys((byte) (keys&3));
+
+            switch (s) {
+                case OFF_ON:
+                    imgBtn = R.drawable.buttonsoffon;
+                    setBusy(true);
+                    break;
+                case ON_OFF:
+                    imgBtn = R.drawable.buttonsonoff;
+                    setBusy(true);
+                    break;
+                case ON_ON:
+                    imgBtn = R.drawable.buttonsonon;
+                    break;
+                default:
+                    imgBtn = R.drawable.buttonsoffoff;
+                    setBusy(false);
+                    break;
+            }
+
+            mButton.setImageResource(imgBtn);
+
+
+        }*/
+    }
+
 
     // If a given GATT characteristic is selected, check for supported features.  This sample
     // demonstrates 'Read' and 'Notify' features.  See
@@ -228,11 +481,41 @@ public class DeviceControlActivity extends Activity {
         mBluetoothManager = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
         mBtAdapter = mBluetoothManager.getAdapter();
         Intent gattServiceIntent = new Intent(this, BluetoothLeService.class);
-        bindService(gattServiceIntent, mServiceConnection, BIND_AUTO_CREATE);
+
 
         mBluetoothLeService= BluetoothLeService.getInstance();
-        enableNotification();
+        if (!mIsReceiving) {
+            mIsReceiving = true;
+            registerReceiver(mGattUpdateReceiver, makeGattUpdateIntentFilter());
+        }
 
+        setTitle(mDeviceName);
+
+        // Create GATT object
+        mBluetoothGatt = BluetoothLeService.getBtGatt();
+
+        // Start service discovery
+        if (!mServicesRdy && mBluetoothGatt != null) {
+            if (mBluetoothLeService.getNumServices() == 0)
+                discoverServices();
+            else {
+                displayServices();
+                enableDataCollection(true);
+            }
+        }
+        updateSensorList();
+
+
+    }
+
+    private void discoverServices() {
+        if (mBluetoothGatt.discoverServices()) {
+            mServiceList.clear();
+            setBusy(true);
+            //setStatus("Service discovery started");
+        } else {
+            setError("Service discovery start failed");
+        }
     }
 
     private void enableNotification() {
@@ -259,12 +542,7 @@ public class DeviceControlActivity extends Activity {
         unregisterReceiver(mGattUpdateReceiver);
     }
 
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        unbindService(mServiceConnection);
-        mBluetoothLeService = null;
-    }
+
 
 /*    @Override
     public boolean onCreateOptionsMenu(Menu menu) {
@@ -356,11 +634,11 @@ public class DeviceControlActivity extends Activity {
     }*/
 
     private static IntentFilter makeGattUpdateIntentFilter() {
-        final IntentFilter intentFilter = new IntentFilter();
-        intentFilter.addAction(BluetoothLeService.ACTION_GATT_CONNECTED);
-        intentFilter.addAction(BluetoothLeService.ACTION_GATT_DISCONNECTED);
-        intentFilter.addAction(BluetoothLeService.ACTION_GATT_SERVICES_DISCOVERED);
-        intentFilter.addAction(BluetoothLeService.ACTION_DATA_AVAILABLE);
-        return intentFilter;
+        final IntentFilter fi = new IntentFilter();
+        fi.addAction(BluetoothLeService.ACTION_GATT_SERVICES_DISCOVERED);
+        fi.addAction(BluetoothLeService.ACTION_DATA_NOTIFY);
+        fi.addAction(BluetoothLeService.ACTION_DATA_WRITE);
+        fi.addAction(BluetoothLeService.ACTION_DATA_READ);
+        return fi;
     }
 }
