@@ -504,7 +504,7 @@ public class DeviceControlActivity extends Activity {
             }
         }
         updateSensorList();
-
+        enableNotification();
 
     }
 

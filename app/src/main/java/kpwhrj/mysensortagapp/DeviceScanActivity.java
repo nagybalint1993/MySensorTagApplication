@@ -3,6 +3,7 @@ package kpwhrj.mysensortagapp;
 import android.app.ListActivity;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
+
 import android.bluetooth.BluetoothGatt;
 import android.bluetooth.BluetoothManager;
 import android.content.ComponentName;
@@ -74,12 +75,12 @@ public class DeviceScanActivity extends ListActivity {
         }
         startActivity(intent);
     }
-
+//!!!!!!! itt a hiba, mert nem csatlakozik
     private void onConnect(BluetoothDevice mBluetoothDevice) {
         int connState = bluetoothManager.getConnectionState(mBluetoothDevice,
                 BluetoothGatt.GATT);
 
-        switch (connState) {
+        /*switch (connState) {
             case BluetoothGatt.STATE_CONNECTED:
                 //mBluetoothLeService.disconnect(null);
                 break;
@@ -94,7 +95,17 @@ public class DeviceScanActivity extends ListActivity {
             default:
                // setError("Device busy (connecting/disconnecting)");
                 break;
-        }
+        }*/
+
+
+            boolean ok = mBluetoothLeService.connect(mBluetoothDevice.getAddress());
+            if (!ok) {
+                Log.i("DSA","Connect failed");
+                //     setError("Connect failed");
+            }
+            Log.i("DSA","Connected to the device");
+
+
     }
 
     private void startBluetoothLeService() {
