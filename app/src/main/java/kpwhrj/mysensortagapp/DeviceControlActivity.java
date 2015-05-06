@@ -1,644 +1,567 @@
 package kpwhrj.mysensortagapp;
 
-/**
- * Created by BalintGyorgy on 2015.03.18..
- */
-/*
- * Copyright (C) 2013 The Android Open Source Project
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+import android.app.Activity;
+import android.app.ProgressDialog;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothGatt;
+import android.bluetooth.BluetoothGattCallback;
+import android.bluetooth.BluetoothGattCharacteristic;
+import android.bluetooth.BluetoothGattDescriptor;
+import android.bluetooth.BluetoothManager;
+import android.bluetooth.BluetoothProfile;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Message;
+import android.preference.PreferenceManager;
+import android.util.Log;
+import android.view.Window;
+import android.widget.TextView;
+import android.widget.Toast;
 
+import org.eclipse.paho.client.mqttv3.MqttException;
+import org.eclipse.paho.client.mqttv3.MqttSecurityException;
 
-        import android.app.Activity;
-        import android.bluetooth.BluetoothAdapter;
-        import android.bluetooth.BluetoothGatt;
-        import android.bluetooth.BluetoothGattCharacteristic;
-        import android.bluetooth.BluetoothGattService;
-        import android.bluetooth.BluetoothManager;
-        import android.content.BroadcastReceiver;
-        import android.content.ComponentName;
-        import android.content.Context;
-        import android.content.Intent;
-        import android.content.IntentFilter;
-        import android.content.ServiceConnection;
-        import android.content.SharedPreferences;
-        import android.os.Bundle;
-        import android.os.IBinder;
-        import android.preference.PreferenceManager;
-        import android.util.Log;
-        import android.view.Menu;
-        import android.view.MenuItem;
-        import android.view.View;
-        import android.widget.ExpandableListView;
-        import android.widget.SimpleExpandableListAdapter;
-        import android.widget.TextView;
-        import android.widget.Toast;
+import java.text.DecimalFormat;
+import java.util.UUID;
 
-        import java.text.DecimalFormat;
-        import java.util.AbstractCollection;
-        import java.util.ArrayList;
-        import java.util.HashMap;
-        import java.util.List;
-        import java.util.Locale;
-        import java.util.UUID;
+import kpwhrj.mysensortagapp.MQTT.MqttAndroidClient;
 
-        import static java.util.UUID.fromString;
+import static java.util.UUID.fromString;
 
 /**
- * For a given BLE device, this Activity provides the user interface to connect, display data,
- * and display GATT services and characteristics supported by the device.  The Activity
- * communicates with {@code BluetoothLeService}, which in turn interacts with the
- * Bluetooth LE API.
+ * Created by BalintGyorgy on 2015.04.09..
  */
-public class DeviceControlActivity extends Activity {
-    private final static String TAG = DeviceControlActivity.class.getSimpleName();
-
+public class DeviceControlActivity extends Activity  {
     public static final String EXTRAS_DEVICE_NAME = "DEVICE_NAME";
     public static final String EXTRAS_DEVICE_ADDRESS = "DEVICE_ADDRESS";
-    private static final int GATT_TIMEOUT = 250;
+
+    private static final String TAG = "BluetoothGattActivity";
+
+    private static final String DEVICE_NAME = "SensorTag";
+
+    //Temperature Service
+    private static final UUID UUID_IRT_SERV = fromString("f000aa00-0451-4000-b000-000000000000");
+    private static final UUID UUID_IRT_DATA = fromString("f000aa01-0451-4000-b000-000000000000");
+    private static final UUID UUID_IRT_CONF = fromString("f000aa02-0451-4000-b000-000000000000"); // 0: disable, 1: enable
+    private static final UUID UUID_IRT_PERI = fromString("f000aa03-0451-4000-b000-000000000000"); // Period in tens of milliseconds
+
+    /* Humidity Service */
+    private static final UUID HUMIDITY_SERVICE = fromString("f000aa20-0451-4000-b000-000000000000");
+    private static final UUID HUMIDITY_DATA_CHAR = fromString("f000aa21-0451-4000-b000-000000000000");
+    private static final UUID HUMIDITY_CONFIG_CHAR = fromString("f000aa22-0451-4000-b000-000000000000");
+    /* Barometric Pressure Service */
+    private static final UUID PRESSURE_SERVICE = fromString("f000aa40-0451-4000-b000-000000000000");
+    private static final UUID PRESSURE_DATA_CHAR = fromString("f000aa41-0451-4000-b000-000000000000");
+    private static final UUID PRESSURE_CONFIG_CHAR = fromString("f000aa42-0451-4000-b000-000000000000");
+    private static final UUID PRESSURE_CAL_CHAR = fromString("f000aa43-0451-4000-b000-000000000000");
+    /* Client Configuration Descriptor */
+    private static final UUID CONFIG_DESCRIPTOR = fromString("00002902-0000-1000-8000-00805f9b34fb");
 
 
+    private BluetoothAdapter mBluetoothAdapter;
+
+    private BluetoothGatt mConnectedGatt;
+
+    private TextView mObj, mAmb;
+    private TextView mTemperature;
+    private TextView mHumidity;
+    private TextView mPressure;
+
+
+    private ProgressDialog mProgress;
     private String mDeviceName;
     private String mDeviceAddress;
-    private ExpandableListView mGattServicesList;
-    private BluetoothLeService mBluetoothLeService;
-    private ArrayList<ArrayList<BluetoothGattCharacteristic>> mGattCharacteristics =
-            new ArrayList<ArrayList<BluetoothGattCharacteristic>>();
-    private boolean mConnected = false;
-    private BluetoothGattCharacteristic mNotifyCharacteristic;
-
-    private final String LIST_NAME = "NAME";
-    private final String LIST_UUID = "UUID";
-
-    UUID UUID_IRT_SERV = fromString("f000aa00-0451-4000-b000-000000000000");
-    UUID UUID_IRT_DATA = fromString("f000aa01-0451-4000-b000-000000000000");
-    UUID UUID_IRT_CONF = fromString("f000aa02-0451-4000-b000-000000000000"); // 0: disable, 1: enable
-    UUID UUID_IRT_PERI = fromString("f000aa03-0451-4000-b000-000000000000"); // Period in tens of milliseconds
 
 
-    private TextView mAmbValue;
-    private TextView mObjValue;
-    String mAmb;
-    String mObj;
-
-    private BluetoothGatt mBluetoothGatt;
-    private BluetoothManager mBluetoothManager;
-    private BluetoothAdapter mBtAdapter;
 
     private DecimalFormat decimal = new DecimalFormat("+0.00;-0.00");
-
-    private boolean mServicesRdy= false;
-    private List<BluetoothGattService> mServiceList;
-    private BluetoothGattService mOadService;
-    private BluetoothGattService mConnControlService;
-    private boolean mBusy=false;
-    private boolean mIsReceiving=false;
-    private List<Sensor> mEnabledSensors = new ArrayList<Sensor>();
-
-    // Code to manage Service lifecycle.
+    private BluetoothDevice device;
 
 
-    // Handles various events fired by the Service.
-    // ACTION_GATT_CONNECTED: connected to a GATT server.
-    // ACTION_GATT_DISCONNECTED: disconnected from a GATT server.
-    // ACTION_GATT_SERVICES_DISCOVERED: discovered GATT services.
-    // ACTION_DATA_AVAILABLE: received data from the device.  This can be a result of read
-    //                        or notification operations.
-    private final BroadcastReceiver mGattUpdateReceiver = new BroadcastReceiver() {
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            final String action = intent.getAction();
-            int status = intent.getIntExtra(BluetoothLeService.EXTRA_STATUS,
-                    BluetoothGatt.GATT_SUCCESS);
-
-            if (BluetoothLeService.ACTION_GATT_SERVICES_DISCOVERED.equals(action)) {
-                if (status == BluetoothGatt.GATT_SUCCESS) {
-                    //setStatus("Service discovery complete");
-                    displayServices();
-                    checkOad();
-                    enableDataCollection(true);
-                    getFirmwareRevison();
-                } else {
-                    Toast.makeText(getApplication(), "Service discovery failed",
-                            Toast.LENGTH_LONG).show();
-                    return;
-                }
-            } else if (BluetoothLeService.ACTION_DATA_NOTIFY.equals(action)) {
-                // Notification
-                byte[] value = intent.getByteArrayExtra(BluetoothLeService.EXTRA_DATA);
-                String uuidStr = intent.getStringExtra(BluetoothLeService.EXTRA_UUID);
-                onCharacteristicChanged(uuidStr, value);
-            } else if (BluetoothLeService.ACTION_DATA_WRITE.equals(action)) {
-                // Data written
-                String uuidStr = intent.getStringExtra(BluetoothLeService.EXTRA_UUID);
-                //onCharacteristicWrite(uuidStr, status);
-            } else if (BluetoothLeService.ACTION_DATA_READ.equals(action)) {
-                // Data read
-                String uuidStr = intent.getStringExtra(BluetoothLeService.EXTRA_UUID);
-                byte[] value = intent.getByteArrayExtra(BluetoothLeService.EXTRA_DATA);
-                onCharacteristicsRead(uuidStr, value, status);
-            }
-
-            if (status != BluetoothGatt.GATT_SUCCESS) {
-                setError("GATT error code: " + status);
-            }
-        }
-    };
-
-
-
-    private void getFirmwareRevison() {
-        UUID servUuid = SensorTagGatt.UUID_DEVINFO_SERV;
-        UUID charUuid = SensorTagGatt.UUID_DEVINFO_FWREV;
-        BluetoothGattService serv = mBluetoothGatt.getService(servUuid);
-        BluetoothGattCharacteristic charFwrev = serv.getCharacteristic(charUuid);
-
-        // Write the calibration code to the configuration registers
-        mBluetoothLeService.readCharacteristic(charFwrev);
-        mBluetoothLeService.waitIdle(GATT_TIMEOUT);
-
-    }
-
-    private void displayServices() {
-        mServicesRdy = true;
-
-        try {
-            mServiceList = mBluetoothLeService.getSupportedGattServices();
-        } catch (Exception e) {
-            e.printStackTrace();
-            mServicesRdy = false;
-        }
-
-        // Characteristics descriptor readout done
-        if (!mServicesRdy) {
-            setError("Failed to read services");
-        }
-    }
-
-    private void enableDataCollection(boolean enable) {
-        setBusy(true);
-        enableSensors(enable);
-        enableNotifications(enable);
-        setBusy(false);
-    }
-
-    void setBusy(boolean f) {
-        if (f != mBusy)
-        {
-            mBusy = f;
-        }
-    }
-
-    private void updateSensorList() {
-        mEnabledSensors.clear();
-
-        for (int i = 0; i < Sensor.SENSOR_LIST.length; i++) {
-            Sensor sensor = Sensor.SENSOR_LIST[i];
-            if (isEnabledByPrefs(sensor)) {
-                mEnabledSensors.add(sensor);
-            }
-        }
-    }
-
-    boolean isEnabledByPrefs(final Sensor sensor) {
-        String preferenceKeyString = "pref_"
-                + sensor.name().toLowerCase(Locale.ENGLISH) + "_on";
-
-        SharedPreferences prefs = PreferenceManager
-                .getDefaultSharedPreferences(this);
-
-        Boolean defaultValue = true;
-        return prefs.getBoolean(preferenceKeyString, defaultValue);
-    }
-
-    private void enableSensors(boolean f) {
-        final boolean enable = f;
-
-        for (Sensor sensor : mEnabledSensors) {
-            UUID servUuid = sensor.getService();
-            UUID confUuid = sensor.getConfig();
-
-            // Skip keys
-            if (confUuid == null)
-                break;
-
-
-                // Barometer calibration
-                if (confUuid.equals(SensorTagGatt.UUID_BAR_CONF) && enable) {
-//*********                    calibrateBarometer();
-                }
-
-
-            BluetoothGattService serv = mBluetoothGatt.getService(servUuid);
-            if (serv != null) {
-                BluetoothGattCharacteristic charac = serv.getCharacteristic(confUuid);
-                byte value = enable ? sensor.getEnableSensorCode()
-                        : Sensor.DISABLE_SENSOR_CODE;
-                if (mBluetoothLeService.writeCharacteristic(charac, value)) {
-                    mBluetoothLeService.waitIdle(GATT_TIMEOUT);
-                } else {
-                    setError("Sensor config failed: " + serv.getUuid().toString());
-                    break;
-                }
-            }
-        }
-    }
-
-    private void enableNotifications(boolean f) {
-        final boolean enable = f;
-
-        for (Sensor sensor : mEnabledSensors) {
-            UUID servUuid = sensor.getService();
-            UUID dataUuid = sensor.getData();
-            BluetoothGattService serv = mBluetoothGatt.getService(servUuid);
-            if (serv != null) {
-                BluetoothGattCharacteristic charac = serv.getCharacteristic(dataUuid);
-
-                if (mBluetoothLeService.setCharacteristicNotification(charac, enable)) {
-                    mBluetoothLeService.waitIdle(GATT_TIMEOUT);
-                    try {
-                        Thread.sleep(50);
-                    } catch (InterruptedException e) {
-                        e.printStackTrace();
-                    }
-                } else {
-                    setError("Sensor notification failed: " + serv.getUuid().toString());
-                    break;
-                }
-            }
-        }
-    }
-
-    private void checkOad() {
-        // Check if OAD is supported (needs OAD and Connection Control service)
-        mOadService = null;
-        mConnControlService = null;
-
-        for (int i = 0; i < mServiceList.size()
-                && (mOadService == null || mConnControlService == null); i++) {
-            BluetoothGattService srv = mServiceList.get(i);
-            if (srv.getUuid().equals(GattInfo.OAD_SERVICE_UUID)) {
-                mOadService = srv;
-            }
-            if (srv.getUuid().equals(GattInfo.CC_SERVICE_UUID)) {
-                mConnControlService = srv;
-            }
-        }
-    }
-
-    private void setError(String txt) {
-
-        Toast.makeText(this, txt, Toast.LENGTH_LONG).show();
-    }
-
-    private void onCharacteristicsRead(String uuidStr, byte[] value, int status) {
-        // Log.i(TAG, "onCharacteristicsRead: " + uuidStr);
-
-/*        if (uuidStr.equals(SensorTagGatt.UUID_DEVINFO_FWREV.toString())) {
-            mFwRev = new String(value, 0, 3);
-            Toast.makeText(this, "Firmware revision: " + mFwRev,Toast.LENGTH_LONG).show();
-        }*/
-
-
-        if (uuidStr.equals(SensorTagGatt.UUID_BAR_CALI.toString())) {
-            // Sanity check
-            if (value.length != 16)
-                return;
-
-            // Barometer calibration values are read.
-            List<Integer> cal = new ArrayList<Integer>();
-            for (int offset = 0; offset < 8; offset += 2) {
-                Integer lowerByte = (int) value[offset] & 0xFF;
-                Integer upperByte = (int) value[offset + 1] & 0xFF;
-                cal.add((upperByte << 8) + lowerByte);
-            }
-
-            for (int offset = 8; offset < 16; offset += 2) {
-                Integer lowerByte = (int) value[offset] & 0xFF;
-                Integer upperByte = (int) value[offset + 1];
-                cal.add((upperByte << 8) + lowerByte);
-            }
-
-//********            BarometerCalibrationCoefficients.INSTANCE.barometerCalibrationCoefficients = cal;
-        }
-    }
-
-
-    public void onCharacteristicChanged(String uuidStr, byte[] rawValue) {
-        Point3D v;
-        String msg;
-/*
-        if (uuidStr.equals(SensorTagGatt.UUID_ACC_DATA.toString())) {
-            v = Sensor.ACCELEROMETER.convert(rawValue);
-            msg = decimal.format(v.x) + "\n" + decimal.format(v.y) + "\n"
-                    + decimal.format(v.z) + "\n";
-            mAccValue.setText(msg);
-        }
-
-        if (uuidStr.equals(SensorTagGatt.UUID_MAG_DATA.toString())) {
-            v = Sensor.MAGNETOMETER.convert(rawValue);
-            msg = decimal.format(v.x) + "\n" + decimal.format(v.y) + "\n"
-                    + decimal.format(v.z) + "\n";
-            mMagValue.setText(msg);
-        }
-
-        if (uuidStr.equals(SensorTagGatt.UUID_OPT_DATA.toString())) {
-            v = Sensor.LUXOMETER.convert(rawValue);
-            msg = decimal.format(v.x) + "\n";
-            mLuxValue.setText(msg);
-        }
-
-        if (uuidStr.equals(SensorTagGatt.UUID_GYR_DATA.toString())) {
-            v = Sensor.GYROSCOPE.convert(rawValue);
-            msg = decimal.format(v.x) + "\n" + decimal.format(v.y) + "\n"
-                    + decimal.format(v.z) + "\n";
-            mGyrValue.setText(msg);
-        }
-*/
-        if (uuidStr.equals(SensorTagGatt.UUID_IRT_DATA.toString())) {
-            v = Sensor.IR_TEMPERATURE.convert(rawValue);
-            msg = decimal.format(v.x) + "\n";
-            mAmbValue.setText(msg);
-            msg = decimal.format(v.y) + "\n";
-            mObjValue.setText(msg);
-        }
-/*
-        if (uuidStr.equals(SensorTagGatt.UUID_HUM_DATA.toString())) {
-            v = Sensor.HUMIDITY.convert(rawValue);
-            msg = decimal.format(v.x) + "\n";
-            mHumValue.setText(msg);
-        }
-
-        if (uuidStr.equals(SensorTagGatt.UUID_BAR_DATA.toString())) {
-            v = Sensor.BAROMETER.convert(rawValue);
-
-            double h = (v.x - BarometerCalibrationCoefficients.INSTANCE.heightCalibration)
-                    / PA_PER_METER;
-            h = (double) Math.round(-h * 10.0) / 10.0;
-            msg = decimal.format(v.x / 100.0f) + "\n" + h;
-            mBarValue.setText(msg);
-        }
-
-        if (uuidStr.equals(SensorTagGatt.UUID_KEY_DATA.toString())) {
-            int keys = rawValue[0];
-            SimpleKeysStatus s;
-            final int imgBtn;
-            s = Sensor.SIMPLE_KEYS.convertKeys((byte) (keys&3));
-
-            switch (s) {
-                case OFF_ON:
-                    imgBtn = R.drawable.buttonsoffon;
-                    setBusy(true);
-                    break;
-                case ON_OFF:
-                    imgBtn = R.drawable.buttonsonoff;
-                    setBusy(true);
-                    break;
-                case ON_ON:
-                    imgBtn = R.drawable.buttonsonon;
-                    break;
-                default:
-                    imgBtn = R.drawable.buttonsoffoff;
-                    setBusy(false);
-                    break;
-            }
-
-            mButton.setImageResource(imgBtn);
-
-
-        }*/
-    }
-
-
-    // If a given GATT characteristic is selected, check for supported features.  This sample
-    // demonstrates 'Read' and 'Notify' features.  See
-    // http://d.android.com/reference/android/bluetooth/BluetoothGatt.html for the complete
-    // list of supported characteristic features.
-    private final ExpandableListView.OnChildClickListener servicesListClickListner =
-            new ExpandableListView.OnChildClickListener() {
-                @Override
-                public boolean onChildClick(ExpandableListView parent, View v, int groupPosition,
-                                            int childPosition, long id) {
-                    if (mGattCharacteristics != null) {
-                        final BluetoothGattCharacteristic characteristic =
-                                mGattCharacteristics.get(groupPosition).get(childPosition);
-                        final int charaProp = characteristic.getProperties();
-                        if ((charaProp | BluetoothGattCharacteristic.PROPERTY_READ) > 0) {
-                            // If there is an active notification on a characteristic, clear
-                            // it first so it doesn't update the data field on the user interface.
-                            if (mNotifyCharacteristic != null) {
-                                mBluetoothLeService.setCharacteristicNotification(
-                                        mNotifyCharacteristic, false);
-                                mNotifyCharacteristic = null;
-                            }
-                            mBluetoothLeService.readCharacteristic(characteristic);
-                        }
-                        if ((charaProp | BluetoothGattCharacteristic.PROPERTY_NOTIFY) > 0) {
-                            mNotifyCharacteristic = characteristic;
-                            mBluetoothLeService.setCharacteristicNotification(
-                                    characteristic, true);
-                        }
-                        return true;
-                    }
-                    return false;
-                }
-            };
-
-
-    private void clearUI() {
-  //      mGattServicesList.setAdapter((SimpleExpandableListAdapter) null);
-        mObjValue.setText(R.string.no_data);
-        mAmbValue.setText(R.string.no_data);
-    }
 
     @Override
-    public void onCreate(Bundle savedInstanceState) {
+    protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_device_control);
-
+        requestWindowFeature(Window.FEATURE_INDETERMINATE_PROGRESS);
+        setContentView(R.layout.activity_devicecontrol);
+        setProgressBarIndeterminate(true);
         final Intent intent = getIntent();
-        mDeviceName = intent.getStringExtra(EXTRAS_DEVICE_NAME);
-        mDeviceAddress = intent.getStringExtra(EXTRAS_DEVICE_ADDRESS);
 
-        // Sets up UI references.
-        mAmbValue= (TextView) this.findViewById(R.id.TVTemperatureAmb);
-        mObjValue= (TextView) this.findViewById(R.id.TVTemperatureObj);
-
-        //getActionBar().setTitle(mDeviceName);
-        //getActionBar().setDisplayHomeAsUpEnabled(true);
-
-        mBluetoothManager = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
-        mBtAdapter = mBluetoothManager.getAdapter();
-        Intent gattServiceIntent = new Intent(this, BluetoothLeService.class);
+        device=MainActivity.getmDevice();
 
 
-        mBluetoothLeService= BluetoothLeService.getInstance();
-        if (!mIsReceiving) {
-            mIsReceiving = true;
-            registerReceiver(mGattUpdateReceiver, makeGattUpdateIntentFilter());
-        }
+        /*
+         * We are going to display the results in some text fields
+         */
+        mAmb = (TextView) findViewById(R.id.TVTemperatureAmb);
+        mObj = (TextView) findViewById(R.id.TVTemperatureObj);
+        mPressure= (TextView) findViewById(R.id.TVPressure);
+        mHumidity= (TextView) findViewById(R.id.TVHumidity);
 
-        setTitle(mDeviceName);
+        /*
+         * Bluetooth in Android 4.3 is accessed via the BluetoothManager, rather than
+         * the old static BluetoothAdapter.getInstance()
+         */
+        BluetoothManager manager = (BluetoothManager) getSystemService(BLUETOOTH_SERVICE);
+        mBluetoothAdapter = manager.getAdapter();
 
-        // Create GATT object
-        mBluetoothGatt = BluetoothLeService.getBtGatt();
 
-        // Start service discovery
-        if (!mServicesRdy && mBluetoothGatt != null) {
-            if (mBluetoothLeService.getNumServices() == 0)
-                discoverServices();
-            else {
-                displayServices();
-                enableDataCollection(true);
-            }
-        }
-        updateSensorList();
-        enableNotification();
-
-    }
-
-    private void discoverServices() {
-        if (mBluetoothGatt.discoverServices()) {
-            mServiceList.clear();
-            setBusy(true);
-            //setStatus("Service discovery started");
-        } else {
-            setError("Service discovery start failed");
-        }
-    }
-
-    private void enableNotification() {
-
-        BluetoothGattService serv = mBluetoothGatt.getService(UUID_IRT_SERV);
-        BluetoothGattCharacteristic charac = serv.getCharacteristic(UUID_IRT_DATA);
-        mBluetoothGatt.setCharacteristicNotification(charac, true);
-
+        /*
+         * A progress dialog will be needed while the connection process is
+         * taking place
+         */
+        mProgress = new ProgressDialog(this);
+        mProgress.setIndeterminate(true);
+        mProgress.setCancelable(false);
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        registerReceiver(mGattUpdateReceiver, makeGattUpdateIntentFilter());
-        if (mBluetoothLeService != null) {
-            final boolean result = mBluetoothLeService.connect(mDeviceAddress);
-            Log.d(TAG, "Connect request result=" + result);
+        /*
+         * We need to enforce that Bluetooth is first enabled, and take the
+         * user to settings to enable it if they have not done so.
+         */
+        if (mBluetoothAdapter == null || !mBluetoothAdapter.isEnabled()) {
+            //Bluetooth is disabled
+            Intent enableBtIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
+            startActivity(enableBtIntent);
+            finish();
+            return;
         }
+
+        /*
+         * Check for Bluetooth LE Support.  In production, our manifest entry will keep this
+         * from installing on these devices, but this will allow test devices or other
+         * sideloads to report whether or not the feature exists.
+         */
+        if (!getPackageManager().hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)) {
+            Toast.makeText(this, "No LE Support.", Toast.LENGTH_SHORT).show();
+            finish();
+            return;
+        }
+
+        mConnectedGatt = device.connectGatt(this, false, mGattCallback);
+        //Display progress UI
+        mHandler.sendMessage(Message.obtain(null, MSG_PROGRESS, "Connecting to "+device.getName()+"..."));
+
+
+        clearDisplayValues();
+
+        Log.i(TAG, "Connecting to " + device.getName());
+                /*
+                 * Make a connection with the device using the special LE-specific
+                 * connectGatt() method, passing in a callback for GATT events
+                 */
+        mConnectedGatt = device.connectGatt(this, false, mGattCallback);
+        //Display progress UI
+        mHandler.sendMessage(Message.obtain(null, MSG_PROGRESS, "Connecting to " + device.getName() + "..."));
     }
 
     @Override
     protected void onPause() {
         super.onPause();
-        unregisterReceiver(mGattUpdateReceiver);
+        //Make sure dialog is hidden
+        mProgress.dismiss();
+        //Cancel any scans in progress
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        //Disconnect from any active tag connection
+        if (mConnectedGatt != null) {
+            mConnectedGatt.disconnect();
+            mConnectedGatt = null;
+        }
+    }
+
+
+    private void clearDisplayValues() {
+        mAmb.setText("---");
+        mObj.setText("---");
+        mHumidity.setText("---");
+        mPressure.setText("---");
     }
 
 
 
-/*    @Override
-    public boolean onCreateOptionsMenu(Menu menu) {
-        getMenuInflater().inflate(R.menu.gatt_services, menu);
-        if (mConnected) {
-            menu.findItem(R.id.menu_connect).setVisible(false);
-            menu.findItem(R.id.menu_disconnect).setVisible(true);
-        } else {
-            menu.findItem(R.id.menu_connect).setVisible(true);
-            menu.findItem(R.id.menu_disconnect).setVisible(false);
-        }
-        return true;
-    }*/
-
- /*   @Override
-    public boolean onOptionsItemSelected(MenuItem item) {
-        switch(item.getItemId()) {
-            case R.id.menu_connect:
-                mBluetoothLeService.connect(mDeviceAddress);
-                return true;
-            case R.id.menu_disconnect:
-                mBluetoothLeService.disconnect();
-                return true;
-            case android.R.id.home:
-                onBackPressed();
-                return true;
-        }
-        return super.onOptionsItemSelected(item);
-    }*/
 
 
+    /*
+     * In this callback, we've created a bit of a state machine to enforce that only
+     * one characteristic be read or written at a time until all of our sensors
+     * are enabled and we are registered to get notifications.
+     */
+    private BluetoothGattCallback mGattCallback = new BluetoothGattCallback() {
 
-    // Demonstrates how to iterate through the supported GATT Services/Characteristics.
-    // In this sample, we populate the data structure that is bound to the ExpandableListView
-    // on the UI.
+        /* State Machine Tracking */
+        private int mState = 0;
 
-/*    private void displayGattServices(List<BluetoothGattService> gattServices) {
-        if (gattServices == null) return;
-        String uuid = null;
-        String unknownServiceString = getResources().getString(R.string.unknown_service);
-        String unknownCharaString = getResources().getString(R.string.unknown_characteristic);
-        ArrayList<HashMap<String, String>> gattServiceData = new ArrayList<HashMap<String, String>>();
-        ArrayList<ArrayList<HashMap<String, String>>> gattCharacteristicData
-                = new ArrayList<ArrayList<HashMap<String, String>>>();
-        mGattCharacteristics = new ArrayList<ArrayList<BluetoothGattCharacteristic>>();
+        private void reset() { mState = 0; }
 
-        // Loops through available GATT Services.
-        for (BluetoothGattService gattService : gattServices) {
-            HashMap<String, String> currentServiceData = new HashMap<String, String>();
-            uuid = gattService.getUuid().toString();
-            currentServiceData.put(
-                    LIST_NAME, SampleGattAttributes.lookup(uuid, unknownServiceString));
-            currentServiceData.put(LIST_UUID, uuid);
-            gattServiceData.add(currentServiceData);
+        private void advance() { mState++; }
 
-            ArrayList<HashMap<String, String>> gattCharacteristicGroupData =
-                    new ArrayList<HashMap<String, String>>();
-            List<BluetoothGattCharacteristic> gattCharacteristics =
-                    gattService.getCharacteristics();
-            ArrayList<BluetoothGattCharacteristic> charas =
-                    new ArrayList<BluetoothGattCharacteristic>();
-
-            // Loops through available Characteristics.
-            for (BluetoothGattCharacteristic gattCharacteristic : gattCharacteristics) {
-                charas.add(gattCharacteristic);
-                HashMap<String, String> currentCharaData = new HashMap<String, String>();
-                uuid = gattCharacteristic.getUuid().toString();
-                currentCharaData.put(
-                        LIST_NAME, SampleGattAttributes.lookup(uuid, unknownCharaString));
-                currentCharaData.put(LIST_UUID, uuid);
-                gattCharacteristicGroupData.add(currentCharaData);
+        /*
+         * Send an enable command to each sensor by writing a configuration
+         * characteristic.  This is specific to the SensorTag to keep power
+         * low by disabling sensors you aren't using.
+         */
+        private void enableNextSensor(BluetoothGatt gatt) {
+            BluetoothGattCharacteristic characteristic;
+            switch (mState) {
+                case 0:
+                    Log.d(TAG, "Enabling pressure cal");
+                    characteristic = gatt.getService(PRESSURE_SERVICE)
+                            .getCharacteristic(PRESSURE_CONFIG_CHAR);
+                    characteristic.setValue(new byte[] {0x02});
+                    break;
+                case 1:
+                    Log.d(TAG, "Enabling pressure");
+                    characteristic = gatt.getService(PRESSURE_SERVICE)
+                            .getCharacteristic(PRESSURE_CONFIG_CHAR);
+                    characteristic.setValue(new byte[] {0x01});
+                    break;
+                case 2:
+                    Log.d(TAG, "Enabling humidity");
+                    characteristic = gatt.getService(HUMIDITY_SERVICE)
+                            .getCharacteristic(HUMIDITY_CONFIG_CHAR);
+                    characteristic.setValue(new byte[] {0x01});
+                    break;
+                case 3:
+                    Log.d(TAG, "Enabling temperature");
+                    characteristic = gatt.getService(UUID_IRT_SERV)
+                            .getCharacteristic(UUID_IRT_CONF);
+                    characteristic.setValue(new byte[] {0x01});
+                    break;
+                default:
+                    mHandler.sendEmptyMessage(MSG_DISMISS);
+                    Log.i(TAG, "All Sensors Enabled");
+                    return;
             }
-            mGattCharacteristics.add(charas);
-            gattCharacteristicData.add(gattCharacteristicGroupData);
+
+            gatt.writeCharacteristic(characteristic);
         }
 
-        SimpleExpandableListAdapter gattServiceAdapter = new SimpleExpandableListAdapter(
-                this,
-                gattServiceData,
-                android.R.layout.simple_expandable_list_item_2,
-                new String[] {LIST_NAME, LIST_UUID},
-                new int[] { android.R.id.text1, android.R.id.text2 },
-                gattCharacteristicData,
-                android.R.layout.simple_expandable_list_item_2,
-                new String[] {LIST_NAME, LIST_UUID},
-                new int[] { android.R.id.text1, android.R.id.text2 }
-        );
-        mGattServicesList.setAdapter(gattServiceAdapter);
-    }*/
+        /*
+         * Read the data characteristic's value for each sensor explicitly
+         */
+        private void readNextSensor(BluetoothGatt gatt) {
+            BluetoothGattCharacteristic characteristic;
+            switch (mState) {
+                case 0:
+                    Log.d(TAG, "Reading pressure cal");
+                    characteristic = gatt.getService(PRESSURE_SERVICE)
+                            .getCharacteristic(PRESSURE_CAL_CHAR);
+                    break;
+                case 1:
+                    Log.d(TAG, "Reading pressure");
+                    characteristic = gatt.getService(PRESSURE_SERVICE)
+                            .getCharacteristic(PRESSURE_DATA_CHAR);
+                    break;
+                case 2:
+                    Log.d(TAG, "Reading humidity");
+                    characteristic = gatt.getService(HUMIDITY_SERVICE)
+                            .getCharacteristic(HUMIDITY_DATA_CHAR);
+                    break;
+                case 3:
+                    Log.d(TAG, "Reading temperature");
+                    characteristic = gatt.getService(UUID_IRT_SERV)
+                            .getCharacteristic(UUID_IRT_DATA);
+                    break;
+                default:
+                    mHandler.sendEmptyMessage(MSG_DISMISS);
+                    Log.i(TAG, "All Sensors Enabled");
+                    return;
+            }
 
-    private static IntentFilter makeGattUpdateIntentFilter() {
-        final IntentFilter fi = new IntentFilter();
-        fi.addAction(BluetoothLeService.ACTION_GATT_SERVICES_DISCOVERED);
-        fi.addAction(BluetoothLeService.ACTION_DATA_NOTIFY);
-        fi.addAction(BluetoothLeService.ACTION_DATA_WRITE);
-        fi.addAction(BluetoothLeService.ACTION_DATA_READ);
-        return fi;
+            gatt.readCharacteristic(characteristic);
+        }
+
+        /*
+         * Enable notification of changes on the data characteristic for each sensor
+         * by writing the ENABLE_NOTIFICATION_VALUE flag to that characteristic's
+         * configuration descriptor.
+         */
+        private void setNotifyNextSensor(BluetoothGatt gatt) {
+            BluetoothGattCharacteristic characteristic;
+            switch (mState) {
+                case 0:
+                    Log.d(TAG, "Set notify pressure cal");
+                    characteristic = gatt.getService(PRESSURE_SERVICE)
+                            .getCharacteristic(PRESSURE_CAL_CHAR);
+                    break;
+                case 1:
+                    Log.d(TAG, "Set notify pressure");
+                    characteristic = gatt.getService(PRESSURE_SERVICE)
+                            .getCharacteristic(PRESSURE_DATA_CHAR);
+                    break;
+                case 2:
+                    Log.d(TAG, "Set notify humidity");
+                    characteristic = gatt.getService(HUMIDITY_SERVICE)
+                            .getCharacteristic(HUMIDITY_DATA_CHAR);
+                    break;
+                case 3:
+                    Log.d(TAG, "Set notify temperature");
+                    characteristic = gatt.getService(UUID_IRT_SERV)
+                            .getCharacteristic(UUID_IRT_DATA);
+                    break;
+                default:
+                    mHandler.sendEmptyMessage(MSG_DISMISS);
+                    Log.i(TAG, "All Sensors Enabled");
+                    return;
+            }
+
+            //Enable local notifications
+            gatt.setCharacteristicNotification(characteristic, true);
+            //Enabled remote notifications
+            BluetoothGattDescriptor desc = characteristic.getDescriptor(CONFIG_DESCRIPTOR);
+            desc.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
+            gatt.writeDescriptor(desc);
+        }
+
+        @Override
+        public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
+            Log.d(TAG, "Connection State Change: " + status + " -> " + connectionState(newState));
+            if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothProfile.STATE_CONNECTED) {
+                /*
+                 * Once successfully connected, we must next discover all the services on the
+                 * device before we can read and write their characteristics.
+                 */
+                gatt.discoverServices();
+                mHandler.sendMessage(Message.obtain(null, MSG_PROGRESS, "Discovering Services..."));
+            } else if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothProfile.STATE_DISCONNECTED) {
+                /*
+                 * If at any point we disconnect, send a message to clear the weather values
+                 * out of the UI
+                 */
+                mHandler.sendEmptyMessage(MSG_CLEAR);
+            } else if (status != BluetoothGatt.GATT_SUCCESS) {
+                /*
+                 * If there is a failure at any stage, simply disconnect
+                 */
+                gatt.disconnect();
+            }
+        }
+
+        @Override
+        public void onServicesDiscovered(BluetoothGatt gatt, int status) {
+            Log.d(TAG, "Services Discovered: "+status);
+            mHandler.sendMessage(Message.obtain(null, MSG_PROGRESS, "Enabling Sensors..."));
+            /*
+             * With services discovered, we are going to reset our state machine and start
+             * working through the sensors we need to enable
+             */
+            reset();
+            enableNextSensor(gatt);
+        }
+
+        @Override
+        public void onCharacteristicRead(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, int status) {
+            //For each read, pass the data up to the UI thread to update the display
+            if (HUMIDITY_DATA_CHAR.equals(characteristic.getUuid())) {
+                mHandler.sendMessage(Message.obtain(null, MSG_HUMIDITY, characteristic));
+            }
+            if (PRESSURE_DATA_CHAR.equals(characteristic.getUuid())) {
+                mHandler.sendMessage(Message.obtain(null, MSG_PRESSURE, characteristic));
+            }
+            if (PRESSURE_CAL_CHAR.equals(characteristic.getUuid())) {
+                mHandler.sendMessage(Message.obtain(null, MSG_PRESSURE_CAL, characteristic));
+            }
+            if (UUID_IRT_DATA.equals(characteristic.getUuid())){
+                mHandler.sendMessage(Message.obtain(null, MSG_TEMPERATURE, characteristic));
+            }
+            //After reading the initial value, next we enable notifications
+            setNotifyNextSensor(gatt);
+        }
+
+        @Override
+        public void onCharacteristicWrite(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, int status) {
+            //After writing the enable flag, next we read the initial value
+            readNextSensor(gatt);
+        }
+
+        @Override
+        public void onCharacteristicChanged(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic) {
+            /*
+             * After notifications are enabled, all updates from the device on characteristic
+             * value changes will be posted here.  Similar to read, we hand these up to the
+             * UI thread to update the display.
+             */
+            if (HUMIDITY_DATA_CHAR.equals(characteristic.getUuid())) {
+                mHandler.sendMessage(Message.obtain(null, MSG_HUMIDITY, characteristic));
+            }
+            if (PRESSURE_DATA_CHAR.equals(characteristic.getUuid())) {
+                mHandler.sendMessage(Message.obtain(null, MSG_PRESSURE, characteristic));
+            }
+            if (PRESSURE_CAL_CHAR.equals(characteristic.getUuid())) {
+                mHandler.sendMessage(Message.obtain(null, MSG_PRESSURE_CAL, characteristic));
+            }
+            if (UUID_IRT_DATA.equals(characteristic.getUuid())){
+                mHandler.sendMessage(Message.obtain(null, MSG_TEMPERATURE, characteristic));
+            }
+        }
+
+        @Override
+        public void onDescriptorWrite(BluetoothGatt gatt, BluetoothGattDescriptor descriptor, int status) {
+            //Once notifications are enabled, we move to the next sensor and start over with enable
+            advance();
+            enableNextSensor(gatt);
+        }
+
+        @Override
+        public void onReadRemoteRssi(BluetoothGatt gatt, int rssi, int status) {
+            Log.d(TAG, "Remote RSSI: "+rssi);
+        }
+
+        private String connectionState(int status) {
+            switch (status) {
+                case BluetoothProfile.STATE_CONNECTED:
+                    return "Connected";
+                case BluetoothProfile.STATE_DISCONNECTED:
+                    return "Disconnected";
+                case BluetoothProfile.STATE_CONNECTING:
+                    return "Connecting";
+                case BluetoothProfile.STATE_DISCONNECTING:
+                    return "Disconnecting";
+                default:
+                    return String.valueOf(status);
+            }
+        }
+    };
+
+    /*
+     * We have a Handler to process event results on the main thread
+     */
+    private static final int MSG_TEMPERATURE=104;
+    private static final int MSG_HUMIDITY = 101;
+    private static final int MSG_PRESSURE = 102;
+    private static final int MSG_PRESSURE_CAL = 103;
+    private static final int MSG_PROGRESS = 201;
+    private static final int MSG_DISMISS = 202;
+    private static final int MSG_CLEAR = 301;
+    private Handler mHandler = new Handler() {
+        @Override
+        public void handleMessage(Message msg) {
+            BluetoothGattCharacteristic characteristic;
+            switch (msg.what) {
+                case MSG_HUMIDITY:
+                    characteristic = (BluetoothGattCharacteristic) msg.obj;
+                    if (characteristic.getValue() == null) {
+                        Log.w(TAG, "Error obtaining humidity value");
+                        return;
+                    }
+                    updateHumidityValues(characteristic);
+                    break;
+                case MSG_PRESSURE:
+                    characteristic = (BluetoothGattCharacteristic) msg.obj;
+                    if (characteristic.getValue() == null) {
+                        Log.w(TAG, "Error obtaining pressure value");
+                        return;
+                    }
+                    updatePressureValue(characteristic);
+                    break;
+                case MSG_PRESSURE_CAL:
+                    characteristic = (BluetoothGattCharacteristic) msg.obj;
+                    if (characteristic.getValue() == null) {
+                        Log.w(TAG, "Error obtaining cal value");
+                        return;
+                    }
+                    updatePressureCals(characteristic);
+                    break;
+                case MSG_TEMPERATURE:
+                    characteristic = (BluetoothGattCharacteristic) msg.obj;
+                    if (characteristic.getValue() == null) {
+                        Log.w(TAG, "Error obtaining cal value");
+                        return;
+                    }
+                    updateTemperature(characteristic);
+                    break;
+                case MSG_PROGRESS:
+                    mProgress.setMessage((String) msg.obj);
+                    if (!mProgress.isShowing()) {
+                        mProgress.show();
+                    }
+                    break;
+                case MSG_DISMISS:
+                    mProgress.hide();
+                    break;
+                case MSG_CLEAR:
+                    clearDisplayValues();
+                    break;
+            }
+        }
+    };
+
+    /* Methods to extract sensor data and update the UI */
+
+    private void updateHumidityValues(BluetoothGattCharacteristic characteristic) {
+        double humidity = SensorTagData.extractHumidity(characteristic);
+
+         mHumidity.setText(String.format("%.0f%%", humidity));
+    }
+
+    private int[] mPressureCals;
+    private void updatePressureCals(BluetoothGattCharacteristic characteristic) {
+        mPressureCals = SensorTagData.extractCalibrationCoefficients(characteristic);
+    }
+
+    private void updateTemperature(BluetoothGattCharacteristic characteristic){
+        Point3D v;
+        String msg;
+        v = SensorTagData.TemperatureConvert(characteristic);
+        msg = decimal.format(v.x) + "\n";
+        mAmb.setText(msg);
+        msg = decimal.format(v.y) + "\n";
+        mObj.setText(msg);
+        publish("Temperature",msg);
+    }
+
+    private void updatePressureValue(BluetoothGattCharacteristic characteristic) {
+        if (mPressureCals == null) return;
+        double pressure = SensorTagData.extractBarometer(characteristic, mPressureCals);
+        double temp = SensorTagData.extractBarTemperature(characteristic, mPressureCals);
+
+//        mTemperature.setText(String.format("%.1f\u00B0C", temp));
+        mPressure.setText(String.format("%.2f", pressure));
+    }
+
+
+    public void publish(String topic, String message)
+    {
+        int checked = 0;
+        int qos = ActivityConstants.defaultQos;
+
+        String server = PreferenceManager.getDefaultSharedPreferences(getBaseContext()).getString("server", "empty");
+        String clientId = PreferenceManager.getDefaultSharedPreferences(getBaseContext()).getString("clientid", "empty");
+        int port = Integer.parseInt(PreferenceManager.getDefaultSharedPreferences(getBaseContext()).getString("port", ""));
+
+        String uri= "tcp://" + server + ":" + port;
+        // create a client handle
+        String clientHandle = uri + clientId;
+
+
+        boolean retained = false;
+
+        String[] args = new String[2];
+        args[0] = message;
+        args[1] = topic+";qos:"+qos+";retained:"+retained;
+
+
+
+        try {
+            MainActivity.connection.getClient()
+                    .publish(topic, message.getBytes(), qos, retained, null, new ActionListener(this, ActionListener.Action.PUBLISH, clientHandle, args));
+        }
+        catch (MqttSecurityException e) {
+            Log.e(this.getClass().getCanonicalName(), "Failed to publish a messged from the client with the handle " + clientHandle, e);
+        }
+        catch (MqttException e) {
+            Log.e(this.getClass().getCanonicalName(), "Failed to publish a messged from the client with the handle " + clientHandle, e);
+        }
+
     }
 }
