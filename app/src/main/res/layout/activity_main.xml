@@ -6,30 +6,16 @@
     android:paddingTop="50dp"
     >
 
-    <Button
-        android:id="@+id/btnConnServ"
-        android:layout_width="200dp"
-        android:layout_height="100dp"
-        android:layout_gravity="center"
-        android:text="Connect to server"
-        android:layout_marginBottom="30dp"
-        />
+
 
     <Button
         android:id="@+id/btnConnDev"
         android:layout_width="200dp"
         android:layout_height="100dp"
         android:layout_gravity="center"
-        android:text="Connect to device"
+        android:text="Connect"
         android:layout_marginBottom="30dp"
         />
 
-    <Button
-        android:id="@+id/btnpublish"
-        android:layout_width="200dp"
-        android:layout_height="100dp"
-        android:layout_gravity="center"
-        android:text="Publish"
-        android:layout_marginBottom="30dp"
-        />
+
 </LinearLayout>
