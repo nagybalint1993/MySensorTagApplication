@@ -10,11 +10,12 @@
 
     <Button
         android:id="@+id/btnConnDev"
-        android:layout_width="200dp"
-        android:layout_height="100dp"
+        android:layout_width="300dp"
+        android:layout_height="200dp"
         android:layout_gravity="center"
         android:text="Connect"
-        android:layout_marginBottom="30dp"
+        android:textSize="30sp"
+        android:layout_marginBottom="50dp"
         />
 
 

@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">MySensorTagApp</string>
+    <string name="app_name">BLE proxy application</string>
     <string name="ble_not_supported">Bluetooth Low Energy is not supported.</string>
     <string name="error_bluetooth_not_supported">ERROR: Bluetooth not supported</string>
     <string name="connected">CONNECTED</string>

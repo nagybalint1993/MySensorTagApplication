@@ -67,7 +67,8 @@ public class MainActivity extends ActionBarActivity {
         btnConnDev.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                startService(new Intent(MainActivity.this, ProxyService.class));
+                if(checkParameters(v))
+                     startService(new Intent(MainActivity.this, ProxyService.class));
             }
         });
 
@@ -109,7 +110,22 @@ public class MainActivity extends ActionBarActivity {
     }
 
 
-
+    private boolean checkParameters(View view) {
+                    if(PreferenceManager.getDefaultSharedPreferences(view.getContext()).getString("clientid","empty").equals("empty")){
+                            Toast.makeText(view.getContext(),"Please set the client ID in the settings.",Toast.LENGTH_LONG).show();
+                           Log.d("checkParameters","no clientid");
+                            return false;
+                        }
+                    if (PreferenceManager.getDefaultSharedPreferences(view.getContext()).getString("server","empty").equals("empty")){
+                            Toast.makeText(view.getContext(),"Please set the Server name in the settings.",Toast.LENGTH_LONG).show();
+                            return false;
+                        }
+                    if (PreferenceManager.getDefaultSharedPreferences(view.getContext()).getString("port","").equals("")){
+                            Toast.makeText(view.getContext(),"Please set the port number in the settings.",Toast.LENGTH_LONG).show();
+                            return false;
+                       }
+                    return true;
+               }
 
 
 }
